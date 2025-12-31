@@ -74,6 +74,7 @@ CREATE TABLE IF NOT EXISTS feedback_tags (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   workspace_id INTEGER NOT NULL,
   name TEXT NOT NULL,
+  color TEXT DEFAULT '#6b7280',
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
   FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
   UNIQUE (workspace_id, name)
@@ -92,3 +93,9 @@ CREATE INDEX IF NOT EXISTS idx_feedback_board
 
 CREATE INDEX IF NOT EXISTS idx_votes_feedback
   ON feedback_votes(feedback_id);
+
+CREATE TABLE IF NOT EXISTS rate_limits (
+  key TEXT PRIMARY KEY,
+  count INTEGER NOT NULL,
+  window_start INTEGER NOT NULL
+);
