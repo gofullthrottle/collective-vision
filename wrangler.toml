@@ -112,6 +112,20 @@ ENVIRONMENT = "production"
 ALLOWED_ORIGINS = "https://feedback.your-domain.com, https://*.your-domain.com"
 
 # =============================================================================
+# SCHEDULED JOBS (Cron Triggers)
+# =============================================================================
+# Cloudflare Cron Triggers for background processing
+
+[triggers]
+crons = [
+  "0 9 * * *",    # Daily reports - 9 AM UTC
+  "0 9 * * 1",    # Weekly reports - Monday 9 AM UTC
+  "0 */6 * * *",  # Brand monitoring crawl - every 6 hours
+  "0 * * * *",    # AI processing - every hour
+  "0 3 * * *"     # Cleanup - 3 AM UTC daily
+]
+
+# =============================================================================
 # SECRETS MANAGEMENT
 # =============================================================================
 # Secrets should NEVER be committed to version control!
