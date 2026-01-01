@@ -1,0 +1,6 @@
+projectKey=collective-vision
+serverUrl=https://sonarqube.jfcreations.com
+serverVersion=25.9.0.112764
+dashboardUrl=https://sonarqube.jfcreations.com/dashboard?id=collective-vision
+ceTaskId=f542e604-9d4c-450a-836b-3df4519ec755
+ceTaskUrl=https://sonarqube.jfcreations.com/api/ce/task?id=f542e604-9d4c-450a-836b-3df4519ec755

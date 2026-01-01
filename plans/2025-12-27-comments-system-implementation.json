@@ -1,0 +1,239 @@
+{
+  "phase": "implementation",
+  "timestamp": "2025-12-27T20:00:00Z",
+  "task": "Comments System Implementation",
+  "files": [
+    {
+      "path": "/Users/johnfreier/initiative-engine/workspaces/john-freier/orgs/gofullthrottle/initiatives/collective-vision-through-feedback/src/worker.ts",
+      "type": "source",
+      "description": "Added complete comments system with backend API and widget UI",
+      "changes": [
+        "Added MAX_COMMENT_LENGTH constant (2000 chars)",
+        "Added commentCreate rate limit (10 per 10 minutes)",
+        "Added 3 comment API endpoints (list, create, delete admin)",
+        "Enhanced WIDGET_JS with comment display and submission UI",
+        "Added CSS styles for comments section",
+        "Updated feedback item layout to column flex with row wrapper",
+        "Added comment toggle button with expand/collapse",
+        "Added comment form with textarea and submit button",
+        "Added loadComments() function to fetch comments",
+        "Added renderComments() function to display comments and form"
+      ]
+    }
+  ],
+  "endpoints_implemented": [
+    {
+      "method": "GET",
+      "path": "/api/v1/:workspace/:board/feedback/:id/comments",
+      "description": "List comments for a feedback item (public, non-internal only)",
+      "authentication": "None (public endpoint)",
+      "response": {
+        "comments": "array of {id, body, created_at, author_name}"
+      },
+      "validation": [
+        "Feedback must exist and be visible (is_hidden=0, moderation_state=approved)",
+        "Only returns non-internal comments (is_internal=0)"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/:workspace/:board/feedback/:id/comments",
+      "description": "Create a new comment on feedback",
+      "authentication": "None (uses externalUserId)",
+      "body": {
+        "content": "string (required, max 2000 chars)",
+        "externalUserId": "string (required)"
+      },
+      "response": {
+        "comment": "object {id, body, created_at, author_name}"
+      },
+      "validation": [
+        "Content required and trimmed",
+        "Content max length 2000 characters",
+        "Feedback must exist and be visible",
+        "Rate limited: 10 comments per 10 minutes per user"
+      ],
+      "rate_limiting": {
+        "limit": 10,
+        "window": "600 seconds",
+        "key_format": "comment:create:{workspace}:{board}:{identity}"
+      }
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/:workspace/admin/feedback/:id/comments/:commentId",
+      "description": "Delete a comment (admin only)",
+      "authentication": "X-Admin-Token required",
+      "response": "204 No Content",
+      "validation": [
+        "Admin token verification",
+        "Workspace must exist",
+        "Comment must belong to the feedback item"
+      ]
+    }
+  ],
+  "widget_enhancements": {
+    "ui_changes": [
+      "Changed feedback-item to flex-direction: column",
+      "Added feedback-row wrapper for vote button and content",
+      "Added comment toggle button below description",
+      "Added expandable comments section",
+      "Added comment list display",
+      "Added comment submission form"
+    ],
+    "styles_added": [
+      "cv-feedback-row - horizontal layout for vote and content",
+      "cv-comment-toggle - button to show/hide comments",
+      "cv-comments-section - container for comments",
+      "cv-comment - individual comment display",
+      "cv-comment-author - comment author name",
+      "cv-comment-body - comment text content",
+      "cv-comment-form - form for new comments",
+      "cv-comment-input - textarea for comment text",
+      "cv-comment-submit - submit button"
+    ],
+    "interactions": [
+      "Click 'View comments' to load and display comments",
+      "Click 'Hide comments' to collapse section",
+      "Enter text in textarea and click 'Post comment' to submit",
+      "Loading spinner shown while fetching comments",
+      "Textarea clears after successful submission",
+      "Comments reload after submission to show new comment"
+    ]
+  },
+  "database_queries": {
+    "listComments": {
+      "description": "Fetch non-internal comments with author info",
+      "query": "SELECT c.id, c.body, c.created_at, u.name, u.external_user_id FROM feedback_comments c LEFT JOIN end_users u ON u.id = c.author_id WHERE c.feedback_id = ? AND c.is_internal = 0 ORDER BY c.created_at ASC",
+      "joins": "LEFT JOIN with end_users for author name"
+    },
+    "createComment": {
+      "description": "Insert new comment",
+      "query": "INSERT INTO feedback_comments (feedback_id, author_id, body, is_internal, created_at) VALUES (?, ?, ?, 0, ?)",
+      "fields": "Sets is_internal=0 for public comments"
+    },
+    "deleteComment": {
+      "description": "Delete comment by ID",
+      "query": "DELETE FROM feedback_comments WHERE id = ?",
+      "validation": "Verifies comment belongs to feedback item before deletion"
+    }
+  },
+  "security_measures": [
+    "Rate limiting on comment creation (10 per 10 minutes)",
+    "Input sanitization (trim whitespace)",
+    "Max length validation (2000 characters)",
+    "Feedback visibility check (must be approved and not hidden)",
+    "Admin-only deletion with token verification",
+    "Comment ownership validation (must belong to feedback item)",
+    "Public endpoint only returns non-internal comments"
+  ],
+  "error_handling": [
+    "Invalid feedback ID returns 400",
+    "Missing comment content returns 400",
+    "Content too long returns 400 with max length",
+    "Feedback not found or not visible returns 404",
+    "Rate limit exceeded returns 429 with retry_after",
+    "Workspace not found returns 404",
+    "Comment not found returns 404",
+    "Admin auth failure returns 401"
+  ],
+  "code_quality": {
+    "type_safety": "Proper TypeScript typing for all functions",
+    "error_responses": "Consistent error format with descriptive messages",
+    "code_reuse": "Uses existing helpers (errorResponse, jsonResponse, buildClientIdentity, enforceRateLimit)",
+    "patterns": "Follows existing code patterns in worker.ts",
+    "validation": "Input validation at all boundaries",
+    "widget_code": "Plain JavaScript (ES5) for broad browser compatibility"
+  },
+  "testsWritten": 0,
+  "estimatedCoverage": 0,
+  "acceptanceCriteriaMapping": {
+    "Backend API - List Comments": [
+      "GET /api/v1/:workspace/:board/feedback/:id/comments implemented",
+      "Returns non-internal comments only",
+      "Includes author name"
+    ],
+    "Backend API - Create Comment": [
+      "POST /api/v1/:workspace/:board/feedback/:id/comments implemented",
+      "Requires content field",
+      "Rate limited"
+    ],
+    "Backend API - Delete Comment": [
+      "DELETE /api/v1/:workspace/admin/feedback/:id/comments/:commentId implemented",
+      "Requires X-Admin-Token header",
+      "Validates comment belongs to feedback"
+    ],
+    "Widget - Comment Display": [
+      "Comment count/toggle button added",
+      "Expand to show comments",
+      "Shows author name and comment body",
+      "Styled consistently with widget design"
+    ],
+    "Widget - Comment Submission": [
+      "Textarea for new comments",
+      "Submit button",
+      "Clears textarea after submission",
+      "Reloads comments to show new entry"
+    ]
+  },
+  "edgeCasesHandled": [
+    "Empty comment content validation",
+    "Comment max length enforcement",
+    "Feedback not found or not visible",
+    "No comments yet (shows form only)",
+    "Loading state while fetching comments",
+    "Failed comment fetch (error message)",
+    "Failed comment submission (alert)",
+    "Comment ownership validation for deletion",
+    "Anonymous users (falls back to 'Anonymous' display name)"
+  ],
+  "admin_ui_notes": "Admin UI implementation for comments not included in this phase - Feedback.tsx is still a placeholder. Admin delete endpoint is implemented and ready for frontend integration.",
+  "readyForReview": true,
+  "notes": [
+    "Schema already has feedback_comments table with correct structure (body field, is_internal flag)",
+    "No schema migration required",
+    "Widget uses content field in API but stores as body in database",
+    "Admin delete route follows workspace-level pattern: /api/v1/:workspace/admin/feedback/:id/comments/:commentId",
+    "Comment toggle button shows 'View comments' by default",
+    "Comments load on-demand when user clicks toggle",
+    "Comments are sorted chronologically (ASC by created_at)",
+    "Rate limiting uses same pattern as feedback and votes",
+    "Widget code is ES5-compatible for broad browser support"
+  ],
+  "deployment_steps": [
+    "Deploy worker: wrangler deploy",
+    "Test public comment listing: GET /api/v1/test-workspace/main/feedback/1/comments",
+    "Test comment creation: POST with {content, externalUserId}",
+    "Test admin deletion: DELETE with X-Admin-Token header",
+    "Test widget in HTML page with embedded script",
+    "Verify comment toggle expands/collapses section",
+    "Verify comment form submits and reloads",
+    "Verify rate limiting works (try posting 11 comments in 10 minutes)"
+  ],
+  "testing_recommendations": [
+    "Test comment creation with valid content",
+    "Test comment creation with empty content (should fail)",
+    "Test comment creation with 2001+ characters (should fail)",
+    "Test comment listing for non-existent feedback (should fail)",
+    "Test comment listing for hidden/rejected feedback (should fail)",
+    "Test admin deletion with valid token",
+    "Test admin deletion without token (should fail)",
+    "Test admin deletion of comment from different feedback (should fail)",
+    "Test widget comment toggle expand/collapse",
+    "Test widget comment form submission",
+    "Test widget with no comments (should show form only)",
+    "Test rate limiting (11th comment in 10 minutes should fail)"
+  ],
+  "future_enhancements": [
+    "Build admin UI components for comment management",
+    "Add comment count to feedback list view",
+    "Add internal comments for team discussions",
+    "Add comment editing capability",
+    "Add comment reactions/upvotes",
+    "Add comment threading/replies",
+    "Add admin bulk delete comments",
+    "Add comment moderation queue",
+    "Add email notifications for new comments",
+    "Add @mention functionality"
+  ]
+}

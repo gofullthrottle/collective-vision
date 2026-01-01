@@ -1,0 +1,174 @@
+{
+  "phase": "implementation",
+  "timestamp": "2025-12-27T18:37:00Z",
+  "task": "Admin API Enhancements (Phase 2)",
+  "files": [
+    {
+      "path": "src/worker.ts",
+      "type": "source",
+      "description": "Added 7 new admin endpoints and enhanced search/sort functionality",
+      "changes": [
+        "Added getAdminStats() - Dashboard statistics endpoint",
+        "Added bulkUpdateFeedback() - Bulk operations (approve/reject/set_status/add_tag)",
+        "Added deleteFeedback() - Delete feedback with cascade",
+        "Added listTags() - List tags with usage count",
+        "Added createTag() - Create new tag",
+        "Added updateTag() - Update tag name/color",
+        "Added deleteTag() - Delete tag with cascade",
+        "Enhanced listAdminFeedback() with search (q), sort, and order params",
+        "Updated handleApi() routing to support workspace-level and board-level admin routes",
+        "Updated CORS headers to allow DELETE method",
+        "Updated ListOptions type to include search, sort, order fields"
+      ]
+    },
+    {
+      "path": "schema.sql",
+      "type": "schema",
+      "description": "Added color column to feedback_tags table",
+      "changes": [
+        "Added 'color TEXT DEFAULT '#6b7280'' column to feedback_tags table"
+      ]
+    }
+  ],
+  "endpoints_implemented": [
+    {
+      "method": "GET",
+      "path": "/api/v1/:workspace/:board/admin/stats",
+      "description": "Dashboard statistics",
+      "response": {
+        "total": "number",
+        "pending_moderation": "number",
+        "approved_today": "number",
+        "top_voted_this_week": "array"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/:workspace/:board/admin/feedback/bulk",
+      "description": "Bulk operations on feedback items",
+      "body": {
+        "action": "approve|reject|set_status|add_tag",
+        "ids": "number[] (max 50)",
+        "value": "string (for set_status and add_tag)"
+      },
+      "response": {
+        "affected": "number"
+      }
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/:workspace/:board/admin/feedback/:id",
+      "description": "Delete feedback item (cascades to votes, comments, tags)",
+      "response": "204 No Content"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/:workspace/admin/tags",
+      "description": "List all tags with usage count",
+      "response": {
+        "tags": "array of {id, name, color, created_at, usage_count}"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/:workspace/admin/tags",
+      "description": "Create new tag",
+      "body": {
+        "name": "string (required)",
+        "color": "string (optional, default: #6b7280)"
+      },
+      "response": {
+        "tag": "object"
+      }
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/:workspace/admin/tags/:id",
+      "description": "Update tag",
+      "body": {
+        "name": "string (optional)",
+        "color": "string (optional)"
+      },
+      "response": {
+        "tag": "object"
+      }
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/:workspace/admin/tags/:id",
+      "description": "Delete tag (cascades to feedback_item_tags)",
+      "response": "204 No Content"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/:workspace/:board/admin/feedback (enhanced)",
+      "description": "List admin feedback with search, sort, and order",
+      "query_params": {
+        "q": "Full-text search on title/description",
+        "sort": "vote_count|created_at|updated_at",
+        "order": "asc|desc",
+        "status": "Filter by status",
+        "moderation_state": "Filter by moderation state",
+        "include_hidden": "Include hidden items",
+        "limit": "Page size (1-200, default 50)",
+        "offset": "Pagination offset (0-2000)"
+      }
+    }
+  ],
+  "implementation_details": {
+    "routing_architecture": "Dual-level routing (workspace-level for tags, board-level for feedback/stats)",
+    "authentication": "All admin endpoints require X-Admin-Token header",
+    "validation": "Input validation for all parameters, max 50 IDs for bulk operations",
+    "error_handling": "Consistent error responses with proper HTTP status codes",
+    "cascading_deletes": "Leverages foreign key constraints for automatic cleanup"
+  },
+  "database_queries": {
+    "stats_endpoint": "4 separate queries (total, pending, approved_today, top_voted_week)",
+    "bulk_operations": "Dynamic SQL with placeholders for IN clauses",
+    "tags_usage": "LEFT JOIN with COUNT aggregation",
+    "search": "LIKE pattern matching on title and description",
+    "sorting": "Dynamic ORDER BY with whitelisted fields"
+  },
+  "security_measures": [
+    "Admin token verification on all admin routes",
+    "Input sanitization (trim, lowercase for tags)",
+    "Whitelisted sort fields to prevent SQL injection",
+    "Max limits on bulk operations (50 IDs)",
+    "Proper HTTP status codes (401, 404, 409, 429)"
+  ],
+  "cors_updates": [
+    "Added DELETE to allowed methods",
+    "Updated both OPTIONS handler and withCors() function"
+  ],
+  "next_steps": [
+    "Apply schema migration: wrangler d1 execute collective-vision-feedback --file=schema.sql",
+    "Test all new endpoints with admin token",
+    "Build admin UI components that consume these endpoints",
+    "Add comprehensive test coverage for edge cases"
+  ],
+  "testing_recommendations": [
+    "Test bulk operations with 50+ IDs (should fail)",
+    "Test tag creation with duplicate names (should return 409)",
+    "Test search with special characters",
+    "Test sorting by each allowed field",
+    "Test DELETE cascades properly",
+    "Test workspace auto-creation in tag endpoints",
+    "Test pagination with large datasets"
+  ],
+  "code_quality": {
+    "type_safety": "All functions properly typed with TypeScript",
+    "error_handling": "Consistent error response format",
+    "code_reuse": "Leverages existing helpers (errorResponse, jsonResponse, withCors)",
+    "patterns": "Follows existing code patterns in worker.ts",
+    "validation": "Input validation at boundaries"
+  },
+  "ready_for_review": true,
+  "notes": [
+    "Schema migration required before deployment",
+    "All endpoints follow RESTful conventions",
+    "Workspace-level routes (tags) are separate from board-level routes (feedback)",
+    "Bulk operations use transactions implicitly via D1 run()",
+    "Search is case-insensitive via LIKE operator",
+    "Tags are normalized to lowercase for consistency"
+  ]
+}
