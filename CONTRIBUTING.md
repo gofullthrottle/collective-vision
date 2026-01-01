@@ -11,27 +11,50 @@ Thank you for your interest in contributing to Collective Vision!
 - Cloudflare account
 - Pre-commit: `pip install pre-commit`
 
-### Getting Started
+### Quick Start (< 15 minutes)
 
 ```bash
-# Clone the repository
+# 1. Clone the repository
 git clone https://github.com/gofullthrottle/collective-vision.git
 cd collective-vision
 
-# Install pre-commit hooks
+# 2. Install dependencies
+npm install
+
+# 3. Install pre-commit hooks
 pre-commit install
 
-# Create D1 database
-wrangler d1 create collective-vision-feedback
+# 4. Copy environment example
+cp .env.example .env
 
-# Update wrangler.toml with the database_id from above
+# 5. Create D1 database (first time only)
+wrangler d1 create collective-vision-feedback-dev
+# Copy the database_id to wrangler.toml line 13
 
-# Apply schema
-wrangler d1 execute collective-vision-feedback --file=schema.sql
+# 6. Set up local database
+npm run db:migrate:local
 
-# Start development server
-wrangler dev
+# 7. Seed with test data (optional)
+npm run db:seed
+
+# 8. Start development server
+npm run dev
 ```
+
+The widget is now available at `http://localhost:8787/widget.js`
+
+### Development Commands
+
+| Command | Description |
+|---------|-------------|
+| `npm run dev` | Start local development server |
+| `npm run test` | Run test suite |
+| `npm run test:watch` | Run tests in watch mode |
+| `npm run test:coverage` | Run tests with coverage report |
+| `npm run typecheck` | Run TypeScript type checking |
+| `npm run db:migrate` | Apply schema to remote D1 |
+| `npm run db:migrate:local` | Apply schema to local D1 |
+| `npm run db:seed` | Seed local database with test data |
 
 ## Development Workflow
 
@@ -89,29 +112,37 @@ fix(widget): correct vote count display after voting
 
 ## Testing
 
-### Manual Testing
+### Automated Tests
+
+```bash
+# Run all tests
+npm test
+
+# Run tests in watch mode during development
+npm run test:watch
+
+# Generate coverage report
+npm run test:coverage
+```
+
+### Manual Widget Testing
 
 ```bash
 # Start dev server
-wrangler dev
+npm run dev
 
-# Embed widget in test HTML
-cat > test.html << 'EOF'
-<!DOCTYPE html>
-<html>
-<body>
-  <h1>Feedback Test</h1>
-  <script
-    src="http://localhost:8787/widget.js"
-    data-workspace="test"
-    data-board="main"
-  ></script>
-</body>
-</html>
-EOF
+# Open the test page in browser
+open tests/widget-test.html
+```
 
-# Open test.html in browser
-open test.html
+Or embed in any HTML page:
+
+```html
+<script
+  src="http://localhost:8787/widget.js"
+  data-workspace="test-workspace"
+  data-board="main"
+></script>
 ```
 
 ### Pre-Commit Checks
