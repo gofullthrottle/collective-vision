@@ -28,6 +28,13 @@ import { handleAuthRoutes } from './routes/auth';
 import { handleOAuthRoutes } from './routes/oauth';
 import { handleTeamRoutes } from './routes/teams';
 import { handleAIRoutes } from './routes/ai';
+import { handleWebhookRoutes } from './routes/webhooks';
+import { handleAnalyticsRoutes } from './routes/analytics';
+import { handleImportRoutes } from './routes/import';
+import { handleSourcesRoutes } from './routes/sources';
+import { handlePlatformRoutes } from './routes/platforms';
+import { handleMcpRequest } from './mcp/server';
+import { handleScheduled } from './scheduled';
 import { enqueueAIJob, type AIJob } from './lib/ai/queue';
 
 // AI binding types
@@ -72,6 +79,28 @@ export interface Env {
   VECTORIZE?: VectorizeIndex;
   /** Wave 2: Queue for async AI processing */
   AI_QUEUE?: Queue<AIJob>;
+  /** Wave 4-5: Firecrawl for brand monitoring */
+  FIRECRAWL_API_KEY?: string;
+  FIRECRAWL_BASE_URL?: string;
+  /** Wave 4-5: LiteLLM for AI classification */
+  LITELLM_API_KEY?: string;
+  LITELLM_BASE_URL?: string;
+  /** Wave 4-5: Discord bot */
+  DISCORD_BOT_TOKEN?: string;
+  DISCORD_APPLICATION_ID?: string;
+  DISCORD_PUBLIC_KEY?: string;
+  /** Wave 4-5: Slack app */
+  SLACK_BOT_TOKEN?: string;
+  SLACK_SIGNING_SECRET?: string;
+  SLACK_CLIENT_ID?: string;
+  SLACK_CLIENT_SECRET?: string;
+  /** Wave 4-5: Reddit integration */
+  REDDIT_CLIENT_ID?: string;
+  REDDIT_CLIENT_SECRET?: string;
+  REDDIT_REFRESH_TOKEN?: string;
+  REDDIT_USER_AGENT?: string;
+  /** Wave 4: Report distribution */
+  REPORT_EMAIL_RECIPIENTS?: string;
 }
 
 // D1 result type extension for SQLite write operations
@@ -604,6 +633,145 @@ const WIDGET_JS = String.raw`(function () {
     resetToForm();
   });
 
+  // ========================================
+  // Analytics Integration
+  // ========================================
+  var analytics = {
+    ga4Id: script.dataset.ga4Id || null,
+    clarityId: script.dataset.clarityId || null,
+    customPixels: [],
+    initialized: false,
+
+    // Initialize analytics from inline config or API
+    init: function() {
+      var self = this;
+
+      // Check for inline configuration first
+      if (this.ga4Id || this.clarityId || script.dataset.pixels) {
+        if (script.dataset.pixels) {
+          try {
+            this.customPixels = JSON.parse(script.dataset.pixels);
+          } catch (e) {}
+        }
+        this.loadScripts();
+        return;
+      }
+
+      // Fetch analytics config from API
+      fetch(apiBase + "/api/v1/" + encodeURIComponent(workspace) + "/analytics/config")
+        .then(function(res) { return res.json(); })
+        .then(function(config) {
+          if (config.ga4_measurement_id) self.ga4Id = config.ga4_measurement_id;
+          if (config.clarity_project_id) self.clarityId = config.clarity_project_id;
+          if (config.custom_pixels) self.customPixels = config.custom_pixels;
+          self.loadScripts();
+        })
+        .catch(function() {
+          // Analytics config not available, continue without tracking
+        });
+    },
+
+    // Load analytics scripts
+    loadScripts: function() {
+      if (this.initialized) return;
+      this.initialized = true;
+
+      // Google Analytics 4
+      if (this.ga4Id) {
+        var gtagScript = document.createElement("script");
+        gtagScript.async = true;
+        gtagScript.src = "https://www.googletagmanager.com/gtag/js?id=" + this.ga4Id;
+        document.head.appendChild(gtagScript);
+
+        window.dataLayer = window.dataLayer || [];
+        window.gtag = function() { window.dataLayer.push(arguments); };
+        window.gtag("js", new Date());
+        window.gtag("config", this.ga4Id, {
+          custom_map: {
+            dimension1: "cv_workspace",
+            dimension2: "cv_board"
+          }
+        });
+      }
+
+      // Microsoft Clarity
+      if (this.clarityId) {
+        (function(c, l, a, r, i, t, y) {
+          c[a] = c[a] || function() { (c[a].q = c[a].q || []).push(arguments); };
+          t = l.createElement(r); t.async = 1; t.src = "https://www.clarity.ms/tag/" + i;
+          y = l.getElementsByTagName(r)[0]; y.parentNode.insertBefore(t, y);
+        })(window, document, "clarity", "script", this.clarityId);
+      }
+
+      // Custom pixels
+      this.customPixels.forEach(function(pixel) {
+        if (pixel.type === "script" && pixel.src) {
+          var pixelScript = document.createElement("script");
+          pixelScript.async = true;
+          pixelScript.src = pixel.src;
+          document.head.appendChild(pixelScript);
+        } else if (pixel.type === "pixel" && pixel.src) {
+          var img = document.createElement("img");
+          img.src = pixel.src;
+          img.width = 1;
+          img.height = 1;
+          img.style.display = "none";
+          document.body.appendChild(img);
+        }
+      });
+
+      // Track widget load
+      this.track("widget_load", { workspace: workspace, board: board });
+    },
+
+    // Track events
+    track: function(eventName, params) {
+      params = params || {};
+      params.cv_workspace = workspace;
+      params.cv_board = board;
+
+      // GA4 event
+      if (window.gtag) {
+        window.gtag("event", eventName, params);
+      }
+
+      // Clarity tag (for custom events)
+      if (window.clarity) {
+        window.clarity("set", eventName, JSON.stringify(params));
+      }
+
+      // Custom pixel tracking (fire beacons)
+      this.customPixels.forEach(function(pixel) {
+        if (pixel.type === "beacon" && pixel.endpoint) {
+          navigator.sendBeacon && navigator.sendBeacon(
+            pixel.endpoint,
+            JSON.stringify({ event: eventName, params: params, timestamp: Date.now() })
+          );
+        }
+      });
+    }
+  };
+
+  // Initialize analytics
+  analytics.init();
+
+  // ========================================
+  // Track user interactions
+  // ========================================
+  var originalVoteFeedback = voteFeedback;
+  voteFeedback = function(feedbackId, btn, countEl) {
+    analytics.track("feedback_vote", { feedback_id: feedbackId });
+    return originalVoteFeedback(feedbackId, btn, countEl);
+  };
+
+  var originalFormSubmit = form.onsubmit;
+  form.addEventListener("submit", function() {
+    analytics.track("feedback_submit", {
+      title_length: titleInput.value.length,
+      has_description: descriptionInput.value.length > 0
+    });
+  });
+
   // Initial fetch
   fetchFeedback();
 })();`;
@@ -695,6 +863,51 @@ const worker: ExportedHandler<Env> = {
         }
       }
 
+      // Handle MCP routes (JSON-RPC 2.0 for AI agents)
+      if (url.pathname.startsWith("/mcp")) {
+        return handleMcpRequest(request, env);
+      }
+
+      // Handle webhook routes
+      if (url.pathname.includes("/webhooks")) {
+        const webhookResp = await handleWebhookRoutes(request, url.pathname, env);
+        if (webhookResp) {
+          return withCors(request, webhookResp, env);
+        }
+      }
+
+      // Handle analytics routes
+      if (url.pathname.includes("/analytics")) {
+        const analyticsResp = await handleAnalyticsRoutes(request, url.pathname, env);
+        if (analyticsResp) {
+          return withCors(request, analyticsResp, env);
+        }
+      }
+
+      // Handle import routes (CSV, JSON, platform imports)
+      if (url.pathname.includes("/import")) {
+        const importResp = await handleImportRoutes(request, url.pathname, env);
+        if (importResp) {
+          return withCors(request, importResp, env);
+        }
+      }
+
+      // Handle sources routes (brand monitoring, listeners, external sources)
+      if (url.pathname.includes("/sources") || url.pathname.includes("/brand") || url.pathname.includes("/listeners") || url.pathname.match(/^\/api\/v1\/listen\//)) {
+        const sourcesResp = await handleSourcesRoutes(request, url.pathname, env);
+        if (sourcesResp) {
+          return withCors(request, sourcesResp, env);
+        }
+      }
+
+      // Handle platform routes (Discord, Slack, Reddit webhooks)
+      if (url.pathname.includes("/platforms")) {
+        const platformResp = await handlePlatformRoutes(request, url.pathname, env);
+        if (platformResp) {
+          return withCors(request, platformResp, env);
+        }
+      }
+
       if (url.pathname.startsWith("/api/v1/")) {
         const resp = await handleApi(request, env);
         return withCors(request, resp, env);
@@ -720,7 +933,17 @@ const worker: ExportedHandler<Env> = {
         env
       );
     }
-  }
+  },
+
+  // Scheduled handler for cron triggers
+  async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil(
+      handleScheduled(
+        { scheduledTime: controller.scheduledTime, cron: controller.cron },
+        env
+      )
+    );
+  },
 };
 
 export default worker;
