@@ -2,10 +2,124 @@ name = "collective-vision-feedback"
 main = "src/worker.ts"
 compatibility_date = "2024-05-01"
 
-route = { pattern = "https://your-feedback-domain.com/*", zone_name = "example.com" }
+# =============================================================================
+# DEFAULT (DEVELOPMENT) CONFIGURATION
+# =============================================================================
+# Used when running: wrangler dev
 
 [[d1_databases]]
 binding = "DB"
+database_name = "collective-vision-feedback-dev"
+database_id = "REPLACE_WITH_DEV_D1_DATABASE_ID"
+
+# =============================================================================
+# AI BINDINGS (Wave 2)
+# =============================================================================
+# Workers AI for embeddings and inference
+[ai]
+binding = "AI"
+
+# Vectorize for semantic search (create with: wrangler vectorize create feedback-embeddings --dimensions=768 --metric=cosine)
+[[vectorize]]
+binding = "VECTORIZE"
+index_name = "feedback-embeddings"
+
+# Queues for async AI processing (create with: wrangler queues create ai-processing)
+[[queues.producers]]
+binding = "AI_QUEUE"
+queue = "ai-processing"
+
+[[queues.consumers]]
+queue = "ai-processing"
+max_batch_size = 10
+max_batch_timeout = 30
+
+[vars]
+ENVIRONMENT = "development"
+ADMIN_API_TOKEN = "dev-admin-token-change-in-production"
+# CORS: "*" allows all origins (dev only). In production, set to comma-separated list.
+# Supports wildcards: "https://example.com, https://*.example.com"
+ALLOWED_ORIGINS = "*"
+
+# =============================================================================
+# STAGING ENVIRONMENT
+# =============================================================================
+# Deploy: wrangler deploy --env staging
+
+[env.staging]
+name = "collective-vision-feedback-staging"
+route = { pattern = "https://feedback-staging.your-domain.com/*", zone_name = "your-domain.com" }
+
+[[env.staging.d1_databases]]
+binding = "DB"
+database_name = "collective-vision-feedback-staging"
+database_id = "REPLACE_WITH_STAGING_D1_DATABASE_ID"
+
+[env.staging.ai]
+binding = "AI"
+
+[[env.staging.vectorize]]
+binding = "VECTORIZE"
+index_name = "feedback-embeddings-staging"
+
+[[env.staging.queues.producers]]
+binding = "AI_QUEUE"
+queue = "ai-processing-staging"
+
+[[env.staging.queues.consumers]]
+queue = "ai-processing-staging"
+max_batch_size = 10
+max_batch_timeout = 30
+
+[env.staging.vars]
+ENVIRONMENT = "staging"
+# Note: Use `wrangler secret put ADMIN_API_TOKEN --env staging` for secrets
+ALLOWED_ORIGINS = "https://feedback-staging.your-domain.com, https://*.staging.your-domain.com"
+
+# =============================================================================
+# PRODUCTION ENVIRONMENT
+# =============================================================================
+# Deploy: wrangler deploy --env production
+
+[env.production]
+name = "collective-vision-feedback"
+route = { pattern = "https://feedback.your-domain.com/*", zone_name = "your-domain.com" }
+
+[[env.production.d1_databases]]
+binding = "DB"
 database_name = "collective-vision-feedback"
-# Replace this with the actual database_id from `wrangler d1 create`
-database_id = "REPLACE_WITH_D1_DATABASE_ID"
+database_id = "REPLACE_WITH_PRODUCTION_D1_DATABASE_ID"
+
+[env.production.ai]
+binding = "AI"
+
+[[env.production.vectorize]]
+binding = "VECTORIZE"
+index_name = "feedback-embeddings-production"
+
+[[env.production.queues.producers]]
+binding = "AI_QUEUE"
+queue = "ai-processing-production"
+
+[[env.production.queues.consumers]]
+queue = "ai-processing-production"
+max_batch_size = 10
+max_batch_timeout = 30
+
+[env.production.vars]
+ENVIRONMENT = "production"
+# Note: Use `wrangler secret put ADMIN_API_TOKEN --env production` for secrets
+ALLOWED_ORIGINS = "https://feedback.your-domain.com, https://*.your-domain.com"
+
+# =============================================================================
+# SECRETS MANAGEMENT
+# =============================================================================
+# Secrets should NEVER be committed to version control!
+# Use wrangler secrets for sensitive values:
+#
+#   wrangler secret put ADMIN_API_TOKEN --env production
+#   wrangler secret put CLAUDE_API_KEY --env production   # Wave 2: AI features
+#   wrangler secret put RESEND_API_KEY --env production   # Wave 1: Email notifications
+#
+# List secrets:
+#   wrangler secret list --env production

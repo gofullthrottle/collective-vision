@@ -6,5 +6,13 @@
   "template": "default",
   "folders_created": 3,
   "lists_created": 10,
-  "sync_enabled": true
+  "sync_enabled": true,
+  "team_id": "42051537",
+  "git": {
+    "has_remote": true,
+    "remote_url": "git@github.com:gofullthrottle/collective-vision.git",
+    "provider": "github",
+    "owner": "gofullthrottle",
+    "repo": "collective-vision"
+  }
 }
