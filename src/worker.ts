@@ -1,21 +1,95 @@
-export interface Env {
-  DB: D1Database;
-  ADMIN_API_TOKEN?: string;
+import {
+  validate,
+  parseSearchParams,
+  createFeedbackSchema,
+  voteSchema,
+  createCommentSchema,
+  updateFeedbackSchema,
+  bulkUpdateFeedbackSchema,
+  createTagSchema,
+  updateTagSchema,
+  listFeedbackQuerySchema,
+  adminListFeedbackQuerySchema,
+  MAX_TITLE_LENGTH,
+  MAX_DESCRIPTION_LENGTH,
+  MAX_EXTERNAL_USER_ID_LENGTH,
+  MAX_COMMENT_LENGTH,
+  ALLOWED_STATUSES,
+  ALLOWED_MODERATION_STATES,
+  type CreateFeedbackInput,
+  type VoteInput,
+  type CreateCommentInput,
+  type UpdateFeedbackInput,
+  type BulkUpdateFeedbackInput,
+  type CreateTagInput,
+  type UpdateTagInput,
+} from './lib/validation';
+import { handleAuthRoutes } from './routes/auth';
+import { handleOAuthRoutes } from './routes/oauth';
+import { handleTeamRoutes } from './routes/teams';
+import { handleAIRoutes } from './routes/ai';
+import { enqueueAIJob, type AIJob } from './lib/ai/queue';
+
+// AI binding types
+interface Ai {
+  run(model: string, inputs: { text: string | string[] }): Promise<{ data: number[][] }>;
 }
 
-const MAX_TITLE_LENGTH = 160;
-const MAX_DESCRIPTION_LENGTH = 4000;
-const MAX_EXTERNAL_USER_ID_LENGTH = 128;
-const MAX_COMMENT_LENGTH = 2000;
-const ALLOWED_STATUSES = new Set([
-  "open",
-  "under_review",
-  "planned",
-  "in_progress",
-  "done",
-  "declined"
-]);
-const ALLOWED_MODERATION_STATES = new Set(["pending", "approved", "rejected"]);
+interface VectorizeIndex {
+  upsert(vectors: Array<{ id: string; values: number[]; metadata?: Record<string, unknown> }>): Promise<{ count: number }>;
+  query(vector: number[], options: { topK: number; filter?: Record<string, unknown>; returnMetadata?: boolean }): Promise<{ matches: Array<{ id: string; score: number; metadata?: Record<string, unknown> }>; count: number }>;
+  getByIds(ids: string[]): Promise<Array<{ id: string; values: number[]; metadata?: Record<string, unknown> }>>;
+  deleteByIds(ids: string[]): Promise<{ count: number }>;
+}
+
+interface Queue<T> {
+  send(message: T, options?: { contentType?: string }): Promise<void>;
+  sendBatch(messages: Array<{ body: T; contentType?: string }>): Promise<void>;
+}
+
+export interface Env {
+  DB: D1Database;
+  /** Current environment: development, staging, or production */
+  ENVIRONMENT?: "development" | "staging" | "production";
+  ADMIN_API_TOKEN?: string;
+  /** Comma-separated list of allowed origins, or "*" for all (dev only) */
+  ALLOWED_ORIGINS?: string;
+  /** Wave 2: Claude API key for AI features */
+  CLAUDE_API_KEY?: string;
+  /** Wave 1: Resend API key for email notifications */
+  RESEND_API_KEY?: string;
+  /** OAuth: Google credentials */
+  GOOGLE_CLIENT_ID?: string;
+  GOOGLE_CLIENT_SECRET?: string;
+  /** OAuth: GitHub credentials */
+  GITHUB_CLIENT_ID?: string;
+  GITHUB_CLIENT_SECRET?: string;
+  /** Base URL for the application (for OAuth redirects) */
+  APP_URL?: string;
+  /** Wave 2: Workers AI binding for embeddings */
+  AI?: Ai;
+  /** Wave 2: Vectorize index for semantic search */
+  VECTORIZE?: VectorizeIndex;
+  /** Wave 2: Queue for async AI processing */
+  AI_QUEUE?: Queue<AIJob>;
+}
+
+// D1 result type extension for SQLite write operations
+// The D1Result type from @cloudflare/workers-types doesn't expose lastRowId/changes at top level
+// but they're available in meta. We define this type to work with the actual D1 return values.
+interface D1WriteResult {
+  success: boolean;
+  meta: {
+    changed_db: boolean;
+    changes: number;
+    duration: number;
+    last_row_id: number;
+    rows_read: number;
+    rows_written: number;
+    size_after: number;
+  };
+}
+
 const RATE_LIMITS = {
   feedbackCreate: { limit: 5, windowSeconds: 600 },
   feedbackVote: { limit: 30, windowSeconds: 600 },
@@ -50,7 +124,7 @@ const WIDGET_JS = String.raw`(function () {
   if (!document.getElementById(styleId)) {
     var style = document.createElement("style");
     style.id = styleId;
-    style.textContent = ":root { --cv-bg: #ffffff; --cv-bg-elevated: #fafafa; --cv-border: #e5e5e5; --cv-border-subtle: #f0f0f0; --cv-text: #171717; --cv-text-secondary: #737373; --cv-text-muted: #a3a3a3; --cv-accent: " + accentColor + "; --cv-accent-hover: #2563eb; --cv-success: #22c55e; --cv-radius-sm: 6px; --cv-radius-md: 10px; --cv-radius-lg: 14px; --cv-shadow-sm: 0 1px 2px rgba(0,0,0,0.05); --cv-shadow-md: 0 4px 6px -1px rgba(0,0,0,0.1); --cv-shadow-lg: 0 10px 15px -3px rgba(0,0,0,0.1); --cv-font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; } [data-theme='dark'] { --cv-bg: #18181b; --cv-bg-elevated: #27272a; --cv-border: #3f3f46; --cv-border-subtle: #27272a; --cv-text: #fafafa; --cv-text-secondary: #a1a1aa; --cv-text-muted: #71717a; --cv-accent: " + accentColor + "; --cv-accent-hover: #60a5fa; --cv-success: #4ade80; } @keyframes cv-fadeIn { from { opacity: 0; } to { opacity: 1; } } @keyframes cv-slideUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } } @keyframes cv-scalePop { 0% { transform: scale(1); } 50% { transform: scale(1.15); } 100% { transform: scale(1); } } @keyframes cv-checkmark { 0% { stroke-dashoffset: 24; } 100% { stroke-dashoffset: 0; } } @keyframes cv-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } } #cv-feedback-widget { font-family: var(--cv-font); background: var(--cv-bg); border: 1px solid var(--cv-border); border-radius: var(--cv-radius-lg); padding: 24px; max-width: 480px; box-shadow: var(--cv-shadow-md); animation: cv-fadeIn 0.3s ease-out; } .cv-header { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; } .cv-header-icon { width: 24px; height: 24px; color: var(--cv-accent); } .cv-header-content h2 { margin: 0; font-size: 18px; font-weight: 600; color: var(--cv-text); } .cv-header-content p { margin: 2px 0 0 0; font-size: 13px; color: var(--cv-text-secondary); } .cv-feedback-item { display: flex; flex-direction: column; gap: 12px; padding: 14px; background: var(--cv-bg-elevated); border: 1px solid var(--cv-border); border-radius: var(--cv-radius-md); margin-bottom: 10px; transition: all 0.2s ease; animation: cv-slideUp 0.3s ease-out; } .cv-feedback-item:hover { box-shadow: var(--cv-shadow-sm); } .cv-feedback-row { display: flex; gap: 12px; } .cv-vote-btn { display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; padding: 8px; background: var(--cv-bg); border: 1.5px solid var(--cv-border); border-radius: var(--cv-radius-sm); cursor: pointer; transition: all 0.2s ease; font-size: 14px; font-weight: 500; color: var(--cv-text-secondary); } .cv-vote-btn:hover:not(:disabled) { border-color: var(--cv-accent); color: var(--cv-accent); } .cv-vote-btn.voted { background: var(--cv-accent); border-color: var(--cv-accent); color: white; } .cv-vote-btn:disabled { opacity: 0.5; cursor: not-allowed; } .cv-vote-arrow { width: 14px; height: 14px; margin-bottom: 2px; } .cv-vote-count { font-size: 13px; font-weight: 600; } .cv-feedback-content { flex: 1; } .cv-feedback-title { font-size: 14px; font-weight: 600; color: var(--cv-text); margin-bottom: 4px; } .cv-feedback-description { font-size: 13px; color: var(--cv-text-secondary); line-height: 1.5; margin-bottom: 8px; } .cv-comment-toggle { font-size: 12px; color: var(--cv-accent); background: none; border: none; cursor: pointer; padding: 4px 0; font-weight: 500; transition: opacity 0.2s; } .cv-comment-toggle:hover { opacity: 0.8; } .cv-comments-section { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--cv-border-subtle); } .cv-comment { padding: 8px 0; border-bottom: 1px solid var(--cv-border-subtle); } .cv-comment:last-child { border-bottom: none; } .cv-comment-author { font-size: 12px; font-weight: 600; color: var(--cv-text); margin-bottom: 4px; } .cv-comment-body { font-size: 13px; color: var(--cv-text-secondary); line-height: 1.4; } .cv-comment-form { margin-top: 8px; display: flex; flex-direction: column; gap: 8px; } .cv-comment-input { width: 100%; padding: 8px 12px; font-size: 13px; font-family: var(--cv-font); color: var(--cv-text); background: var(--cv-bg); border: 1.5px solid var(--cv-border); border-radius: var(--cv-radius-sm); resize: vertical; min-height: 60px; box-sizing: border-box; } .cv-comment-input:focus { outline: none; border-color: var(--cv-accent); box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1); } .cv-comment-submit { align-self: flex-end; padding: 6px 16px; font-size: 13px; font-weight: 600; color: white; background: var(--cv-accent); border: none; border-radius: var(--cv-radius-sm); cursor: pointer; transition: all 0.2s ease; } .cv-comment-submit:hover:not(:disabled) { background: var(--cv-accent-hover); } .cv-comment-submit:disabled { opacity: 0.6; cursor: not-allowed; } .cv-form { display: flex; flex-direction: column; gap: 12px; margin: 20px 0; } .cv-input-wrapper { position: relative; } .cv-input, .cv-textarea { width: 100%; padding: 12px; font-size: 16px; font-family: var(--cv-font); color: var(--cv-text); background: var(--cv-bg); border: 1.5px solid var(--cv-border); border-radius: var(--cv-radius-md); transition: all 0.2s ease; box-sizing: border-box; } .cv-input:focus, .cv-textarea:focus { outline: none; border-color: var(--cv-accent); box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1); } .cv-textarea { resize: vertical; min-height: 80px; } .cv-char-count { position: absolute; bottom: 8px; right: 12px; font-size: 12px; color: var(--cv-text-muted); pointer-events: none; } .cv-submit-btn { align-self: flex-start; display: flex; align-items: center; gap: 8px; padding: 12px 24px; min-height: 44px; font-size: 14px; font-weight: 600; color: white; background: var(--cv-accent); border: none; border-radius: var(--cv-radius-md); cursor: pointer; transition: all 0.2s ease; } .cv-submit-btn:hover:not(:disabled) { background: var(--cv-accent-hover); transform: translateY(-1px); box-shadow: var(--cv-shadow-md); } .cv-submit-btn:disabled { opacity: 0.6; cursor: not-allowed; transform: none; } .cv-spinner { width: 16px; height: 16px; border: 2px solid rgba(255,255,255,0.3); border-top-color: white; border-radius: 50%; animation: cv-spin 0.6s linear infinite; } .cv-thank-you { text-align: center; padding: 32px 0; } .cv-checkmark-container { display: inline-block; margin-bottom: 16px; } .cv-checkmark { width: 48px; height: 48px; } .cv-checkmark-circle { stroke: var(--cv-success); stroke-width: 2; fill: none; } .cv-checkmark-check { stroke: var(--cv-success); stroke-width: 2.5; fill: none; stroke-dasharray: 24; stroke-dashoffset: 24; animation: cv-checkmark 0.5s ease-out 0.2s forwards; } .cv-thank-you h3 { margin: 0 0 8px 0; font-size: 18px; font-weight: 600; color: var(--cv-text); } .cv-thank-you p { margin: 0 0 16px 0; font-size: 14px; color: var(--cv-text-secondary); } .cv-thank-you-cta { display: inline-block; padding: 10px 20px; font-size: 13px; color: var(--cv-accent); background: transparent; border: 1.5px solid var(--cv-border); border-radius: var(--cv-radius-md); text-decoration: none; transition: all 0.2s ease; margin-bottom: 12px; } .cv-thank-you-cta:hover { border-color: var(--cv-accent); background: rgba(59, 130, 246, 0.05); } .cv-submit-another { display: inline-block; font-size: 13px; font-weight: 500; color: var(--cv-accent); background: none; border: none; cursor: pointer; text-decoration: underline; } .cv-footer { display: flex; justify-content: space-between; align-items: center; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--cv-border-subtle); } .cv-badge { font-size: 12px; color: var(--cv-text-muted); text-decoration: none; transition: color 0.2s ease; } .cv-badge:hover { color: var(--cv-text-secondary); } .cv-footer-cta { font-size: 12px; font-weight: 500; color: var(--cv-accent); text-decoration: none; transition: opacity 0.2s ease; } .cv-footer-cta:hover { opacity: 0.8; } .cv-empty { text-align: center; padding: 32px 0; color: var(--cv-text-muted); font-size: 14px; } .hidden { display: none !important; }";
+    style.textContent = ":root { --cv-bg: #ffffff; --cv-bg-elevated: #fafafa; --cv-border: #e5e5e5; --cv-border-subtle: #f0f0f0; --cv-text: #171717; --cv-text-secondary: #737373; --cv-text-muted: #a3a3a3; --cv-accent: " + accentColor + "; --cv-accent-hover: #2563eb; --cv-success: #22c55e; --cv-radius-sm: 6px; --cv-radius-md: 10px; --cv-radius-lg: 14px; --cv-shadow-sm: 0 1px 2px rgba(0,0,0,0.05); --cv-shadow-md: 0 4px 6px -1px rgba(0,0,0,0.1); --cv-shadow-lg: 0 10px 15px -3px rgba(0,0,0,0.1); --cv-font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; --cv-spacing: 24px; --cv-touch-target: 44px; } [data-theme='dark'] { --cv-bg: #18181b; --cv-bg-elevated: #27272a; --cv-border: #3f3f46; --cv-border-subtle: #27272a; --cv-text: #fafafa; --cv-text-secondary: #a1a1aa; --cv-text-muted: #71717a; --cv-accent: " + accentColor + "; --cv-accent-hover: #60a5fa; --cv-success: #4ade80; } @keyframes cv-fadeIn { from { opacity: 0; } to { opacity: 1; } } @keyframes cv-slideUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } } @keyframes cv-scalePop { 0% { transform: scale(1); } 50% { transform: scale(1.15); } 100% { transform: scale(1); } } @keyframes cv-checkmark { 0% { stroke-dashoffset: 24; } 100% { stroke-dashoffset: 0; } } @keyframes cv-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } } #cv-feedback-widget { font-family: var(--cv-font); background: var(--cv-bg); border: 1px solid var(--cv-border); border-radius: var(--cv-radius-lg); padding: var(--cv-spacing); max-width: 480px; width: 100%; box-sizing: border-box; box-shadow: var(--cv-shadow-md); animation: cv-fadeIn 0.3s ease-out; } .cv-header { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; } .cv-header-icon { width: 24px; height: 24px; flex-shrink: 0; color: var(--cv-accent); } .cv-header-content h2 { margin: 0; font-size: 18px; font-weight: 600; color: var(--cv-text); } .cv-header-content p { margin: 2px 0 0 0; font-size: 13px; color: var(--cv-text-secondary); } .cv-feedback-item { display: flex; flex-direction: column; gap: 12px; padding: 14px; background: var(--cv-bg-elevated); border: 1px solid var(--cv-border); border-radius: var(--cv-radius-md); margin-bottom: 10px; transition: all 0.2s ease; animation: cv-slideUp 0.3s ease-out; } .cv-feedback-item:hover { box-shadow: var(--cv-shadow-sm); } @media (hover: hover) { .cv-feedback-item:hover { box-shadow: var(--cv-shadow-sm); } } .cv-feedback-item:active { background: var(--cv-bg); } .cv-feedback-row { display: flex; gap: 12px; } .cv-vote-btn { display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: var(--cv-touch-target); min-height: var(--cv-touch-target); padding: 8px; background: var(--cv-bg); border: 1.5px solid var(--cv-border); border-radius: var(--cv-radius-sm); cursor: pointer; transition: all 0.2s ease; font-size: 14px; font-weight: 500; color: var(--cv-text-secondary); -webkit-tap-highlight-color: transparent; touch-action: manipulation; } @media (hover: hover) { .cv-vote-btn:hover:not(:disabled) { border-color: var(--cv-accent); color: var(--cv-accent); } } .cv-vote-btn:active:not(:disabled) { border-color: var(--cv-accent); color: var(--cv-accent); transform: scale(0.95); } .cv-vote-btn.voted { background: var(--cv-accent); border-color: var(--cv-accent); color: white; } .cv-vote-btn:disabled { opacity: 0.5; cursor: not-allowed; } .cv-vote-arrow { width: 14px; height: 14px; margin-bottom: 2px; } .cv-vote-count { font-size: 13px; font-weight: 600; } .cv-feedback-content { flex: 1; min-width: 0; } .cv-feedback-title { font-size: 14px; font-weight: 600; color: var(--cv-text); margin-bottom: 4px; word-wrap: break-word; overflow-wrap: break-word; } .cv-feedback-description { font-size: 13px; color: var(--cv-text-secondary); line-height: 1.5; margin-bottom: 8px; word-wrap: break-word; overflow-wrap: break-word; } .cv-comment-toggle { font-size: 12px; color: var(--cv-accent); background: none; border: none; cursor: pointer; padding: 8px 0; min-height: var(--cv-touch-target); font-weight: 500; transition: opacity 0.2s; -webkit-tap-highlight-color: transparent; } @media (hover: hover) { .cv-comment-toggle:hover { opacity: 0.8; } } .cv-comment-toggle:active { opacity: 0.6; } .cv-comments-section { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--cv-border-subtle); } .cv-comment { padding: 8px 0; border-bottom: 1px solid var(--cv-border-subtle); } .cv-comment:last-child { border-bottom: none; } .cv-comment-author { font-size: 12px; font-weight: 600; color: var(--cv-text); margin-bottom: 4px; } .cv-comment-body { font-size: 13px; color: var(--cv-text-secondary); line-height: 1.4; word-wrap: break-word; overflow-wrap: break-word; } .cv-comment-form { margin-top: 8px; display: flex; flex-direction: column; gap: 8px; } .cv-comment-input { width: 100%; padding: 12px; font-size: 16px; font-family: var(--cv-font); color: var(--cv-text); background: var(--cv-bg); border: 1.5px solid var(--cv-border); border-radius: var(--cv-radius-sm); resize: vertical; min-height: 60px; box-sizing: border-box; -webkit-appearance: none; } .cv-comment-input:focus { outline: none; border-color: var(--cv-accent); box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1); } .cv-comment-submit { align-self: flex-end; padding: 12px 20px; min-height: var(--cv-touch-target); font-size: 14px; font-weight: 600; color: white; background: var(--cv-accent); border: none; border-radius: var(--cv-radius-sm); cursor: pointer; transition: all 0.2s ease; -webkit-tap-highlight-color: transparent; } @media (hover: hover) { .cv-comment-submit:hover:not(:disabled) { background: var(--cv-accent-hover); } } .cv-comment-submit:active:not(:disabled) { transform: scale(0.98); } .cv-comment-submit:disabled { opacity: 0.6; cursor: not-allowed; } .cv-form { display: flex; flex-direction: column; gap: 12px; margin: 20px 0; } .cv-input-wrapper { position: relative; } .cv-input, .cv-textarea { width: 100%; padding: 12px; font-size: 16px; font-family: var(--cv-font); color: var(--cv-text); background: var(--cv-bg); border: 1.5px solid var(--cv-border); border-radius: var(--cv-radius-md); transition: all 0.2s ease; box-sizing: border-box; -webkit-appearance: none; } .cv-input:focus, .cv-textarea:focus { outline: none; border-color: var(--cv-accent); box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1); } .cv-textarea { resize: vertical; min-height: 80px; } .cv-char-count { position: absolute; bottom: 8px; right: 12px; font-size: 12px; color: var(--cv-text-muted); pointer-events: none; } .cv-submit-btn { align-self: flex-start; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 12px 24px; min-height: var(--cv-touch-target); font-size: 14px; font-weight: 600; color: white; background: var(--cv-accent); border: none; border-radius: var(--cv-radius-md); cursor: pointer; transition: all 0.2s ease; -webkit-tap-highlight-color: transparent; } @media (hover: hover) { .cv-submit-btn:hover:not(:disabled) { background: var(--cv-accent-hover); transform: translateY(-1px); box-shadow: var(--cv-shadow-md); } } .cv-submit-btn:active:not(:disabled) { transform: scale(0.98); } .cv-submit-btn:disabled { opacity: 0.6; cursor: not-allowed; transform: none; } .cv-spinner { width: 16px; height: 16px; border: 2px solid rgba(255,255,255,0.3); border-top-color: white; border-radius: 50%; animation: cv-spin 0.6s linear infinite; } .cv-thank-you { text-align: center; padding: 32px 16px; } .cv-checkmark-container { display: inline-block; margin-bottom: 16px; } .cv-checkmark { width: 48px; height: 48px; } .cv-checkmark-circle { stroke: var(--cv-success); stroke-width: 2; fill: none; } .cv-checkmark-check { stroke: var(--cv-success); stroke-width: 2.5; fill: none; stroke-dasharray: 24; stroke-dashoffset: 24; animation: cv-checkmark 0.5s ease-out 0.2s forwards; } .cv-thank-you h3 { margin: 0 0 8px 0; font-size: 18px; font-weight: 600; color: var(--cv-text); } .cv-thank-you p { margin: 0 0 16px 0; font-size: 14px; color: var(--cv-text-secondary); } .cv-thank-you-cta { display: inline-block; padding: 12px 20px; min-height: var(--cv-touch-target); font-size: 14px; color: var(--cv-accent); background: transparent; border: 1.5px solid var(--cv-border); border-radius: var(--cv-radius-md); text-decoration: none; transition: all 0.2s ease; margin-bottom: 12px; -webkit-tap-highlight-color: transparent; } @media (hover: hover) { .cv-thank-you-cta:hover { border-color: var(--cv-accent); background: rgba(59, 130, 246, 0.05); } } .cv-thank-you-cta:active { background: rgba(59, 130, 246, 0.1); } .cv-submit-another { display: inline-block; font-size: 14px; font-weight: 500; color: var(--cv-accent); background: none; border: none; cursor: pointer; padding: 12px; min-height: var(--cv-touch-target); text-decoration: underline; -webkit-tap-highlight-color: transparent; } .cv-footer { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--cv-border-subtle); } .cv-badge { font-size: 12px; color: var(--cv-text-muted); text-decoration: none; padding: 8px 0; transition: color 0.2s ease; } @media (hover: hover) { .cv-badge:hover { color: var(--cv-text-secondary); } } .cv-footer-cta { font-size: 12px; font-weight: 500; color: var(--cv-accent); text-decoration: none; padding: 8px 0; transition: opacity 0.2s ease; } @media (hover: hover) { .cv-footer-cta:hover { opacity: 0.8; } } .cv-empty { text-align: center; padding: 32px 16px; color: var(--cv-text-muted); font-size: 14px; } .hidden { display: none !important; } @media (max-width: 480px) { #cv-feedback-widget { --cv-spacing: 16px; border-radius: var(--cv-radius-md); } .cv-header-content h2 { font-size: 16px; } .cv-feedback-item { padding: 12px; } .cv-submit-btn { width: 100%; align-self: stretch; } .cv-thank-you-cta { display: block; width: 100%; box-sizing: border-box; text-align: center; } }";
     document.head.appendChild(style);
   }
 
@@ -561,39 +635,91 @@ type ListOptions = {
 
 const worker: ExportedHandler<Env> = {
   async fetch(request, env) {
-    const url = new URL(request.url);
+    try {
+      const url = new URL(request.url);
 
-    if (request.method === "OPTIONS") {
-      return new Response(null, {
-        status: 204,
-        headers: {
-          "Access-Control-Allow-Origin": request.headers.get("Origin") || "*",
-          "Access-Control-Allow-Methods": "GET,POST,PATCH,DELETE,OPTIONS",
-          "Access-Control-Allow-Headers": "Content-Type, X-Admin-Token"
+      if (request.method === "OPTIONS") {
+        return new Response(null, {
+          status: 204,
+          headers: {
+            "Access-Control-Allow-Origin": request.headers.get("Origin") || "*",
+            "Access-Control-Allow-Methods": "GET,POST,PATCH,DELETE,OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type, X-Admin-Token"
+          }
+        });
+      }
+
+      if (request.method === "GET" && url.pathname === "/health") {
+        return withCors(request, jsonResponse({ ok: true }), env);
+      }
+
+      if (request.method === "GET" && url.pathname === "/widget.js") {
+        return new Response(WIDGET_JS, {
+          status: 200,
+          headers: {
+            "content-type": "application/javascript; charset=utf-8",
+            "cache-control": "public, max-age=300"
+          }
+        });
+      }
+
+      // Handle auth routes first
+      if (url.pathname.startsWith("/api/v1/auth/")) {
+        const authResp = await handleAuthRoutes(request, url.pathname, env);
+        if (authResp) {
+          return withCors(request, authResp, env);
         }
-      });
-    }
+      }
 
-    if (request.method === "GET" && url.pathname === "/health") {
-      return withCors(request, jsonResponse({ ok: true }));
-    }
-
-    if (request.method === "GET" && url.pathname === "/widget.js") {
-      return new Response(WIDGET_JS, {
-        status: 200,
-        headers: {
-          "content-type": "application/javascript; charset=utf-8",
-          "cache-control": "public, max-age=300"
+      // Handle OAuth routes (no CORS needed for redirects)
+      if (url.pathname.startsWith("/api/v1/oauth/")) {
+        const oauthResp = await handleOAuthRoutes(request, url.pathname, env);
+        if (oauthResp) {
+          return oauthResp;
         }
-      });
-    }
+      }
 
-    if (url.pathname.startsWith("/api/v1/")) {
-      const resp = await handleApi(request, env);
-      return withCors(request, resp);
-    }
+      // Handle team/invitation routes
+      if (url.pathname.includes("/team") || url.pathname.includes("/invitations/")) {
+        const teamResp = await handleTeamRoutes(request, url.pathname, env);
+        if (teamResp) {
+          return withCors(request, teamResp, env);
+        }
+      }
 
-    return new Response("Not found", { status: 404 });
+      // Handle AI routes (duplicates, themes, processing, usage)
+      if (url.pathname.includes("/ai/") || url.pathname.match(/\/feedback\/[^/]+\/duplicates$/)) {
+        const aiResp = await handleAIRoutes(request, url.pathname, env);
+        if (aiResp) {
+          return withCors(request, aiResp, env);
+        }
+      }
+
+      if (url.pathname.startsWith("/api/v1/")) {
+        const resp = await handleApi(request, env);
+        return withCors(request, resp, env);
+      }
+
+      return withCors(request, errorResponse(404, "Not found"), env);
+    } catch (err) {
+      // Log error context without PII (no request body, no auth headers)
+      const requestId = crypto.randomUUID();
+      console.error(JSON.stringify({
+        requestId,
+        error: err instanceof Error ? err.message : "Unknown error",
+        stack: err instanceof Error ? err.stack : undefined,
+        method: request.method,
+        path: new URL(request.url).pathname,
+        timestamp: new Date().toISOString()
+      }));
+
+      // Return safe error response - no stack traces in production
+      return withCors(
+        request,
+        errorResponse(500, "Internal server error", { requestId }),
+        env
+      );
+    }
   }
 };
 
@@ -610,19 +736,129 @@ function jsonResponse(data: unknown, init?: ResponseInit): Response {
   });
 }
 
+// Standard error codes for consistent API responses
+const ERROR_CODES = {
+  VALIDATION_ERROR: "VALIDATION_ERROR",
+  NOT_FOUND: "NOT_FOUND",
+  UNAUTHORIZED: "UNAUTHORIZED",
+  FORBIDDEN: "FORBIDDEN",
+  RATE_LIMIT_EXCEEDED: "RATE_LIMIT_EXCEEDED",
+  CONFLICT: "CONFLICT",
+  INTERNAL_ERROR: "INTERNAL_ERROR",
+} as const;
+
+type ErrorCode = typeof ERROR_CODES[keyof typeof ERROR_CODES];
+
+// Map HTTP status to error code
+function getErrorCode(status: number): ErrorCode {
+  switch (status) {
+    case 400:
+      return ERROR_CODES.VALIDATION_ERROR;
+    case 401:
+      return ERROR_CODES.UNAUTHORIZED;
+    case 403:
+      return ERROR_CODES.FORBIDDEN;
+    case 404:
+      return ERROR_CODES.NOT_FOUND;
+    case 409:
+      return ERROR_CODES.CONFLICT;
+    case 429:
+      return ERROR_CODES.RATE_LIMIT_EXCEEDED;
+    default:
+      return ERROR_CODES.INTERNAL_ERROR;
+  }
+}
+
 function errorResponse(
   status: number,
   message: string,
-  extra?: Record<string, unknown>
+  details?: Record<string, unknown>
 ): Response {
-  return jsonResponse({ error: message, ...extra }, { status });
+  const code = getErrorCode(status);
+  const body: {
+    error: {
+      code: ErrorCode;
+      message: string;
+      details?: Record<string, unknown>;
+    };
+  } = {
+    error: {
+      code,
+      message,
+    },
+  };
+
+  if (details) {
+    body.error.details = details;
+  }
+
+  return jsonResponse(body, { status });
 }
 
-function withCors(request: Request, response: Response): Response {
-  const origin = request.headers.get("Origin") || "*";
+function addRateLimitHeaders(
+  response: Response,
+  rateLimit: RateLimitResult
+): Response {
   const headers = new Headers(response.headers);
-  headers.set("Access-Control-Allow-Origin", origin);
-  headers.set("Access-Control-Allow-Credentials", "true");
+  headers.set("X-RateLimit-Limit", String(rateLimit.limit));
+  headers.set("X-RateLimit-Remaining", String(rateLimit.remaining));
+  headers.set("X-RateLimit-Reset", String(rateLimit.resetAt));
+  if (rateLimit.retryAfter !== undefined) {
+    headers.set("Retry-After", String(rateLimit.retryAfter));
+  }
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers
+  });
+}
+
+/**
+ * Validate if an origin is allowed based on the ALLOWED_ORIGINS environment variable.
+ * ALLOWED_ORIGINS can be:
+ * - "*" to allow all origins (development only)
+ * - Comma-separated list of allowed origins (production)
+ * - Supports wildcard subdomains like "*.example.com"
+ */
+function isOriginAllowed(origin: string | null, allowedOrigins: string): boolean {
+  if (!origin) return false;
+  if (allowedOrigins === "*") return true;
+
+  const patterns = allowedOrigins.split(",").map((p) => p.trim());
+  for (const pattern of patterns) {
+    if (pattern === origin) return true;
+    // Support wildcard subdomains: *.example.com
+    if (pattern.startsWith("*.")) {
+      const baseDomain = pattern.slice(2);
+      try {
+        const originHost = new URL(origin).host;
+        if (originHost === baseDomain || originHost.endsWith(`.${baseDomain}`)) {
+          return true;
+        }
+      } catch {
+        continue;
+      }
+    }
+  }
+  return false;
+}
+
+function withCors(request: Request, response: Response, env?: Env): Response {
+  const requestOrigin = request.headers.get("Origin");
+  const allowedOrigins = env?.ALLOWED_ORIGINS || "*";
+  const headers = new Headers(response.headers);
+
+  // Validate origin against allowlist
+  if (isOriginAllowed(requestOrigin, allowedOrigins)) {
+    headers.set("Access-Control-Allow-Origin", requestOrigin!);
+    headers.set("Access-Control-Allow-Credentials", "true");
+  } else if (allowedOrigins === "*") {
+    // Development mode: allow all
+    headers.set("Access-Control-Allow-Origin", requestOrigin || "*");
+    headers.set("Access-Control-Allow-Credentials", "true");
+  }
+  // If origin not allowed, don't set CORS headers (browser will block)
+
   headers.set(
     "Access-Control-Allow-Headers",
     headers.get("Access-Control-Allow-Headers") || "Content-Type, X-Admin-Token"
@@ -631,7 +867,12 @@ function withCors(request: Request, response: Response): Response {
     "Access-Control-Allow-Methods",
     headers.get("Access-Control-Allow-Methods") || "GET,POST,PATCH,DELETE,OPTIONS"
   );
-  headers.set("Access-Control-Expose-Headers", "content-type");
+  headers.set(
+    "Access-Control-Expose-Headers",
+    "content-type, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset, Retry-After"
+  );
+  headers.set("Vary", "Origin");
+
   return new Response(response.body, {
     status: response.status,
     statusText: response.statusText,
@@ -989,12 +1230,20 @@ function buildClientIdentity(
   };
 }
 
+interface RateLimitResult {
+  allowed: boolean;
+  limit: number;
+  remaining: number;
+  resetAt: number;
+  retryAfter?: number;
+}
+
 async function enforceRateLimit(
   env: Env,
   key: string,
   limit: number,
   windowSeconds: number
-): Promise<{ allowed: boolean; retryAfter?: number }> {
+): Promise<RateLimitResult> {
   const now = Math.floor(Date.now() / 1000);
   const row = await env.DB
     .prepare("SELECT count, window_start FROM rate_limits WHERE key = ?")
@@ -1010,12 +1259,26 @@ async function enforceRateLimit(
       .bind(key, now)
       .run();
 
-    return { allowed: true };
+    return {
+      allowed: true,
+      limit,
+      remaining: limit - 1,
+      resetAt: now + windowSeconds
+    };
   }
 
+  const resetAt = row.window_start + windowSeconds;
+  const remaining = Math.max(0, limit - row.count - 1);
+
   if (row.count >= limit) {
-    const retryAfter = windowSeconds - (now - row.window_start);
-    return { allowed: false, retryAfter };
+    const retryAfter = resetAt - now;
+    return {
+      allowed: false,
+      limit,
+      remaining: 0,
+      resetAt,
+      retryAfter
+    };
   }
 
   await env.DB.prepare(
@@ -1024,7 +1287,12 @@ async function enforceRateLimit(
     .bind(key)
     .run();
 
-  return { allowed: true };
+  return {
+    allowed: true,
+    limit,
+    remaining,
+    resetAt
+  };
 }
 
 async function getOrCreateWorkspaceAndBoard(
@@ -1203,23 +1471,17 @@ async function createFeedback(
   env: Env,
   workspaceSlug: string,
   boardSlug: string,
-  body: Record<string, unknown>
+  body: unknown
 ): Promise<Response> {
-  const title = typeof body.title === "string" ? body.title.trim() : "";
-  if (!title) return errorResponse(400, "Title is required");
-  if (title.length > MAX_TITLE_LENGTH) {
-    return errorResponse(400, `Title must be <= ${MAX_TITLE_LENGTH} characters`);
+  // Validate input with Zod schema
+  const validation = validate(createFeedbackSchema, body);
+  if (!validation.success) {
+    return errorResponse(400, validation.error);
   }
 
-  const description =
-    typeof body.description === "string" && body.description.trim()
-      ? body.description.trim().slice(0, MAX_DESCRIPTION_LENGTH)
-      : null;
+  const { title, description, externalUserId } = validation.data;
 
-  const identity = buildClientIdentity(
-    request,
-    typeof body.externalUserId === "string" ? body.externalUserId : null
-  );
+  const identity = buildClientIdentity(request, externalUserId ?? null);
   const rateKey = `feedback:create:${workspaceSlug}:${boardSlug}:${identity.rateKey}`;
   const rate = await enforceRateLimit(
     env,
@@ -1228,9 +1490,12 @@ async function createFeedback(
     RATE_LIMITS.feedbackCreate.windowSeconds
   );
   if (!rate.allowed) {
-    return errorResponse(429, "Too many feedback submissions", {
-      retry_after: rate.retryAfter ?? 0
-    });
+    return addRateLimitHeaders(
+      errorResponse(429, "Too many feedback submissions", {
+        retry_after: rate.retryAfter ?? 0
+      }),
+      rate
+    );
   }
 
   const { workspaceId, boardId } = await getOrCreateWorkspaceAndBoard(
@@ -1242,10 +1507,8 @@ async function createFeedback(
   const authorId = await getOrCreateEndUser(env, workspaceId, identity.externalUserId);
   const now = new Date().toISOString();
 
-  const source =
-    typeof body.source === "string" && body.source.trim()
-      ? body.source.trim().slice(0, 64)
-      : "widget";
+  // Default source is "widget" for public submissions
+  const source = "widget";
 
   const result = await env.DB.prepare(
     `INSERT INTO feedback_items
@@ -1253,16 +1516,35 @@ async function createFeedback(
      VALUES (?, ?, ?, ?, 'open', ?, 'approved', 0, ?, ?)`
   )
     .bind(boardId, authorId, title, description, source, now, now)
-    .run();
+    .run() as unknown as D1WriteResult;
 
+  const feedbackId = Number(result.meta.last_row_id);
   const created = await fetchFeedbackById(
     env,
     boardId,
-    Number(result.lastRowId),
+    feedbackId,
     {}
   );
 
-  return jsonResponse({ item: created }, { status: 201 });
+  // Queue AI processing if queue is available (non-blocking)
+  if (env.AI_QUEUE) {
+    try {
+      await enqueueAIJob(
+        env.AI_QUEUE,
+        String(feedbackId),
+        workspaceId,
+        ['embed', 'classify', 'sentiment', 'duplicate']
+      );
+    } catch (error) {
+      // Log but don't fail the request - AI processing is best-effort
+      console.error('Failed to queue AI job:', error);
+    }
+  }
+
+  return addRateLimitHeaders(
+    jsonResponse({ item: created }, { status: 201 }),
+    rate
+  );
 }
 
 async function voteOnFeedback(
@@ -1271,16 +1553,19 @@ async function voteOnFeedback(
   workspaceSlug: string,
   boardSlug: string,
   feedbackId: number,
-  body: Record<string, unknown> | null
+  body: unknown
 ): Promise<Response> {
   if (!Number.isFinite(feedbackId)) {
     return errorResponse(400, "Invalid feedback id");
   }
 
-  const identity = buildClientIdentity(
-    request,
-    body && typeof body.externalUserId === "string" ? body.externalUserId : null
-  );
+  // Validate input with Zod schema (optional body)
+  const validation = validate(voteSchema, body ?? {});
+  if (!validation.success) {
+    return errorResponse(400, validation.error);
+  }
+
+  const identity = buildClientIdentity(request, validation.data.externalUserId ?? null);
   const rateKey = `feedback:vote:${workspaceSlug}:${boardSlug}:${identity.rateKey}`;
   const rate = await enforceRateLimit(
     env,
@@ -1289,7 +1574,10 @@ async function voteOnFeedback(
     RATE_LIMITS.feedbackVote.windowSeconds
   );
   if (!rate.allowed) {
-    return errorResponse(429, "Too many votes", { retry_after: rate.retryAfter ?? 0 });
+    return addRateLimitHeaders(
+      errorResponse(429, "Too many votes", { retry_after: rate.retryAfter ?? 0 }),
+      rate
+    );
   }
 
   const { workspaceId, boardId } = await getOrCreateWorkspaceAndBoard(
@@ -1330,10 +1618,13 @@ async function voteOnFeedback(
     .bind(feedbackId)
     .first<{ vote_count: number }>();
 
-  return jsonResponse({
-    feedback_id: feedbackId,
-    vote_count: Number(row?.vote_count ?? 0)
-  });
+  return addRateLimitHeaders(
+    jsonResponse({
+      feedback_id: feedbackId,
+      vote_count: Number(row?.vote_count ?? 0)
+    }),
+    rate
+  );
 }
 
 async function listComments(
@@ -1398,25 +1689,21 @@ async function createComment(
   workspaceSlug: string,
   boardSlug: string,
   feedbackId: number,
-  body: Record<string, unknown> | null
+  body: unknown
 ): Promise<Response> {
   if (!Number.isFinite(feedbackId)) {
     return errorResponse(400, "Invalid feedback id");
   }
 
-  if (!body || typeof body.content !== "string" || !body.content.trim()) {
-    return errorResponse(400, "Comment content is required");
+  // Validate input with Zod schema
+  const validation = validate(createCommentSchema, body);
+  if (!validation.success) {
+    return errorResponse(400, validation.error);
   }
 
-  const content = body.content.trim();
-  if (content.length > MAX_COMMENT_LENGTH) {
-    return errorResponse(400, `Comment must be <= ${MAX_COMMENT_LENGTH} characters`);
-  }
+  const { content, externalUserId } = validation.data;
 
-  const identity = buildClientIdentity(
-    request,
-    typeof body.externalUserId === "string" ? body.externalUserId : null
-  );
+  const identity = buildClientIdentity(request, externalUserId ?? null);
 
   const rateKey = `comment:create:${workspaceSlug}:${boardSlug}:${identity.rateKey}`;
   const rate = await enforceRateLimit(
@@ -1427,9 +1714,12 @@ async function createComment(
   );
 
   if (!rate.allowed) {
-    return errorResponse(429, "Too many comments", {
-      retry_after: rate.retryAfter ?? 0
-    });
+    return addRateLimitHeaders(
+      errorResponse(429, "Too many comments", {
+        retry_after: rate.retryAfter ?? 0
+      }),
+      rate
+    );
   }
 
   const { workspaceId, boardId } = await getOrCreateWorkspaceAndBoard(
@@ -1460,7 +1750,7 @@ async function createComment(
      VALUES (?, ?, ?, 0, ?)`
   )
     .bind(feedbackId, authorId, content, now)
-    .run();
+    .run() as unknown as D1WriteResult;
 
   const created = await env.DB
     .prepare(
@@ -1473,19 +1763,22 @@ async function createComment(
        LEFT JOIN end_users u ON u.id = c.author_id
        WHERE c.id = ?`
     )
-    .bind(result.lastRowId)
+    .bind(result.meta.last_row_id)
     .first<any>();
 
-  return jsonResponse(
-    {
-      comment: {
-        id: created.id,
-        body: created.body,
-        created_at: created.created_at,
-        author_name: created.name || "Anonymous"
-      }
-    },
-    { status: 201 }
+  return addRateLimitHeaders(
+    jsonResponse(
+      {
+        comment: {
+          id: created.id,
+          body: created.body,
+          created_at: created.created_at,
+          author_name: created.name || "Anonymous"
+        }
+      },
+      { status: 201 }
+    ),
+    rate
   );
 }
 
@@ -1525,9 +1818,9 @@ async function deleteComment(
   const result = await env.DB
     .prepare("DELETE FROM feedback_comments WHERE id = ?")
     .bind(commentId)
-    .run();
+    .run() as unknown as D1WriteResult;
 
-  if (result.changes === 0) {
+  if (result.meta.changes === 0) {
     return errorResponse(404, "Comment not found");
   }
 
@@ -1713,8 +2006,8 @@ async function updateFeedbackAdmin(
       ", "
     )} WHERE id = ? AND board_id = ?`;
 
-    const result = await env.DB.prepare(updateSql).bind(...values).run();
-    if (!result.success || result.changes === 0) {
+    const result = await env.DB.prepare(updateSql).bind(...values).run() as unknown as D1WriteResult;
+    if (!result.success || result.meta.changes === 0) {
       return errorResponse(404, "Feedback not found");
     }
   } else {
@@ -1824,8 +2117,8 @@ async function applyTags(
         "INSERT INTO feedback_tags (workspace_id, name) VALUES (?, ?)"
       )
         .bind(workspaceId, name)
-        .run();
-      tagMap.set(name, Number(insert.lastRowId));
+        .run() as unknown as D1WriteResult;
+      tagMap.set(name, Number(insert.meta.last_row_id));
     }
   }
 
@@ -1941,8 +2234,8 @@ async function bulkUpdateFeedback(
          WHERE board_id = ? AND id IN (${placeholders})`
       )
       .bind(now, boardId, ...ids)
-      .run();
-    affected = result.changes ?? 0;
+      .run() as unknown as D1WriteResult;
+    affected = result.meta.changes ?? 0;
   } else if (action === "reject") {
     const placeholders = ids.map(() => "?").join(",");
     const result = await env.DB
@@ -1952,8 +2245,8 @@ async function bulkUpdateFeedback(
          WHERE board_id = ? AND id IN (${placeholders})`
       )
       .bind(now, boardId, ...ids)
-      .run();
-    affected = result.changes ?? 0;
+      .run() as unknown as D1WriteResult;
+    affected = result.meta.changes ?? 0;
   } else if (action === "set_status") {
     if (
       typeof body.value !== "string" ||
@@ -1969,8 +2262,8 @@ async function bulkUpdateFeedback(
          WHERE board_id = ? AND id IN (${placeholders})`
       )
       .bind(body.value, now, boardId, ...ids)
-      .run();
-    affected = result.changes ?? 0;
+      .run() as unknown as D1WriteResult;
+    affected = result.meta.changes ?? 0;
   } else if (action === "add_tag") {
     if (typeof body.value !== "string" || !body.value.trim()) {
       return errorResponse(400, "Tag name is required");
@@ -2006,9 +2299,9 @@ async function deleteFeedback(
   const result = await env.DB
     .prepare("DELETE FROM feedback_items WHERE id = ? AND board_id = ?")
     .bind(feedbackId, boardId)
-    .run();
+    .run() as unknown as D1WriteResult;
 
-  if (result.changes === 0) {
+  if (result.meta.changes === 0) {
     return errorResponse(404, "Feedback not found");
   }
 
@@ -2051,17 +2344,16 @@ async function listTags(
 async function createTag(
   env: Env,
   workspaceSlug: string,
-  body: Record<string, unknown> | null
+  body: unknown
 ): Promise<Response> {
-  if (!body || typeof body.name !== "string" || !body.name.trim()) {
-    return errorResponse(400, "Tag name is required");
+  // Validate input with Zod schema
+  const validation = validate(createTagSchema, body);
+  if (!validation.success) {
+    return errorResponse(400, validation.error);
   }
 
-  const name = body.name.trim().toLowerCase();
-  const color =
-    typeof body.color === "string" && body.color.trim()
-      ? body.color.trim()
-      : "#6b7280";
+  const name = validation.data.name.toLowerCase();
+  const color = validation.data.color;
 
   let workspace = await env.DB
     .prepare("SELECT id FROM workspaces WHERE slug = ?")
@@ -2090,11 +2382,11 @@ async function createTag(
         "INSERT INTO feedback_tags (workspace_id, name, color) VALUES (?, ?, ?)"
       )
       .bind(workspace.id, name, color)
-      .run();
+      .run() as unknown as D1WriteResult;
 
     const created = await env.DB
       .prepare("SELECT * FROM feedback_tags WHERE id = ?")
-      .bind(result.lastRowId)
+      .bind(result.meta.last_row_id)
       .first();
 
     return jsonResponse({ tag: created }, { status: 201 });
@@ -2110,11 +2402,19 @@ async function updateTag(
   env: Env,
   workspaceSlug: string,
   tagId: number,
-  body: Record<string, unknown> | null
+  body: unknown
 ): Promise<Response> {
   if (!Number.isFinite(tagId)) {
     return errorResponse(400, "Invalid tag id");
   }
+
+  // Validate input with Zod schema
+  const validation = validate(updateTagSchema, body);
+  if (!validation.success) {
+    return errorResponse(400, validation.error);
+  }
+
+  const data = validation.data;
 
   const workspace = await env.DB
     .prepare("SELECT id FROM workspaces WHERE slug = ?")
@@ -2128,20 +2428,14 @@ async function updateTag(
   const fields: string[] = [];
   const values: Array<string | number> = [];
 
-  if (body && "name" in body) {
-    if (typeof body.name !== "string" || !body.name.trim()) {
-      return errorResponse(400, "Tag name cannot be empty");
-    }
+  if (data.name !== undefined) {
     fields.push("name = ?");
-    values.push(body.name.trim().toLowerCase());
+    values.push(data.name.toLowerCase());
   }
 
-  if (body && "color" in body) {
-    if (typeof body.color !== "string") {
-      return errorResponse(400, "Color must be a string");
-    }
+  if (data.color !== undefined) {
     fields.push("color = ?");
-    values.push(body.color.trim() || "#6b7280");
+    values.push(data.color);
   }
 
   if (fields.length === 0) {
@@ -2156,9 +2450,9 @@ async function updateTag(
       `UPDATE feedback_tags SET ${fields.join(", ")} WHERE id = ? AND workspace_id = ?`
     )
     .bind(...values)
-    .run();
+    .run() as unknown as D1WriteResult;
 
-  if (result.changes === 0) {
+  if (result.meta.changes === 0) {
     return errorResponse(404, "Tag not found");
   }
 
@@ -2191,9 +2485,9 @@ async function deleteTag(
   const result = await env.DB
     .prepare("DELETE FROM feedback_tags WHERE id = ? AND workspace_id = ?")
     .bind(tagId, workspace.id)
-    .run();
+    .run() as unknown as D1WriteResult;
 
-  if (result.changes === 0) {
+  if (result.meta.changes === 0) {
     return errorResponse(404, "Tag not found");
   }
 
@@ -2589,8 +2883,16 @@ async function updateWorkspaceFeedback(
   env: Env,
   workspaceSlug: string,
   feedbackId: number,
-  body: Record<string, unknown>
+  body: unknown
 ): Promise<Response> {
+  // Validate input with Zod schema
+  const validation = validate(updateFeedbackSchema, body);
+  if (!validation.success) {
+    return errorResponse(400, validation.error);
+  }
+
+  const data = validation.data;
+
   const workspace = await env.DB
     .prepare("SELECT id FROM workspaces WHERE slug = ?")
     .bind(workspaceSlug)
@@ -2618,47 +2920,36 @@ async function updateWorkspaceFeedback(
   const values: (string | number)[] = [];
 
   // Update status
-  if (body.status !== undefined) {
-    const validStatuses = ["open", "under_review", "planned", "in_progress", "done", "declined"];
-    if (!validStatuses.includes(body.status as string)) {
-      return errorResponse(400, `Invalid status. Must be one of: ${validStatuses.join(", ")}`);
-    }
+  if (data.status !== undefined) {
     updates.push("status = ?");
-    values.push(body.status as string);
+    values.push(data.status);
   }
 
   // Update moderation_state
-  if (body.moderation_state !== undefined) {
-    const validStates = ["pending", "approved", "rejected"];
-    if (!validStates.includes(body.moderation_state as string)) {
-      return errorResponse(400, `Invalid moderation_state. Must be one of: ${validStates.join(", ")}`);
-    }
+  if (data.moderation_state !== undefined) {
     updates.push("moderation_state = ?");
-    values.push(body.moderation_state as string);
+    values.push(data.moderation_state);
   }
 
   // Update is_hidden
-  if (body.is_hidden !== undefined) {
+  if (data.is_hidden !== undefined) {
     updates.push("is_hidden = ?");
-    values.push(body.is_hidden ? 1 : 0);
+    values.push(data.is_hidden ? 1 : 0);
   }
 
   // Update title
-  if (body.title !== undefined) {
-    if (typeof body.title !== "string" || body.title.trim().length === 0) {
-      return errorResponse(400, "Title must be a non-empty string");
-    }
+  if (data.title !== undefined) {
     updates.push("title = ?");
-    values.push(body.title.trim());
+    values.push(data.title);
   }
 
   // Update description
-  if (body.description !== undefined) {
+  if (data.description !== undefined) {
     updates.push("description = ?");
-    values.push(body.description as string || "");
+    values.push(data.description ?? "");
   }
 
-  if (updates.length === 0) {
+  if (updates.length === 0 && !data.tags) {
     return errorResponse(400, "No valid fields to update");
   }
 
@@ -2697,9 +2988,9 @@ async function deleteWorkspaceFeedback(
       )
     `)
     .bind(feedbackId, workspace.id)
-    .run();
+    .run() as unknown as D1WriteResult;
 
-  if (result.changes === 0) {
+  if (result.meta.changes === 0) {
     return errorResponse(404, "Feedback item not found");
   }
 
