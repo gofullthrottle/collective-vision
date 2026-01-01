@@ -4,8 +4,11 @@ import { useWorkspace } from '@/contexts/WorkspaceContext';
 import type { DashboardStats, FeedbackItem } from '@/types/api';
 import { StatCard } from '@/components/StatCard';
 import { ActivityFeed } from '@/components/ActivityFeed';
+import { AnalyticsCharts } from '@/components/AnalyticsCharts';
+import { DashboardWidgets } from '@/components/DashboardWidgets';
 import { MessageSquare, Clock, CheckCircle, TrendingUp } from 'lucide-react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
 export default function Dashboard() {
   const { workspace } = useWorkspace();
@@ -80,10 +83,28 @@ export default function Dashboard() {
         />
       </div>
 
-      <ActivityFeed
-        items={recentFeedback ?? []}
-        isLoading={feedbackLoading}
-      />
+      <Tabs defaultValue="overview" className="space-y-4">
+        <TabsList>
+          <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="analytics">Analytics</TabsTrigger>
+          <TabsTrigger value="widgets">Widgets</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="overview" className="space-y-4">
+          <ActivityFeed
+            items={recentFeedback ?? []}
+            isLoading={feedbackLoading}
+          />
+        </TabsContent>
+
+        <TabsContent value="analytics" className="space-y-4">
+          <AnalyticsCharts />
+        </TabsContent>
+
+        <TabsContent value="widgets" className="space-y-4">
+          <DashboardWidgets />
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }
