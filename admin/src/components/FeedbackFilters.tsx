@@ -57,9 +57,9 @@ export function FeedbackFilters({
   };
 
   return (
-    <div className="flex items-center gap-3">
+    <div className="flex flex-col sm:flex-row sm:items-center gap-3">
       {/* Search Input */}
-      <div className="relative flex-1 max-w-sm">
+      <div className="relative flex-1 sm:max-w-sm">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
         <Input
           placeholder="Search feedback..."
@@ -69,65 +69,68 @@ export function FeedbackFilters({
         />
       </div>
 
-      {/* Status Filter */}
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button variant="outline" size="sm" className="gap-2">
-            <Filter className="h-4 w-4" />
-            Status
-            {status.length > 0 && (
-              <Badge variant="secondary" className="ml-1 rounded-sm px-1 font-normal">
-                {status.length}
-              </Badge>
-            )}
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="w-48">
-          {statusOptions.map((option) => (
-            <DropdownMenuCheckboxItem
-              key={option.value}
-              checked={status.includes(option.value)}
-              onCheckedChange={() => toggleStatus(option.value)}
-            >
-              {option.label}
-            </DropdownMenuCheckboxItem>
-          ))}
-        </DropdownMenuContent>
-      </DropdownMenu>
+      {/* Filter Buttons */}
+      <div className="flex items-center gap-2 flex-wrap">
+        {/* Status Filter */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="outline" size="sm" className="gap-2">
+              <Filter className="h-4 w-4" />
+              Status
+              {status.length > 0 && (
+                <Badge variant="secondary" className="ml-1 rounded-sm px-1 font-normal">
+                  {status.length}
+                </Badge>
+              )}
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="w-48">
+            {statusOptions.map((option) => (
+              <DropdownMenuCheckboxItem
+                key={option.value}
+                checked={status.includes(option.value)}
+                onCheckedChange={() => toggleStatus(option.value)}
+              >
+                {option.label}
+              </DropdownMenuCheckboxItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
 
-      {/* Moderation State Filter */}
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button variant="outline" size="sm" className="gap-2">
-            <Filter className="h-4 w-4" />
-            Moderation
-            {moderationState.length > 0 && (
-              <Badge variant="secondary" className="ml-1 rounded-sm px-1 font-normal">
-                {moderationState.length}
-              </Badge>
-            )}
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="w-48">
-          {moderationOptions.map((option) => (
-            <DropdownMenuCheckboxItem
-              key={option.value}
-              checked={moderationState.includes(option.value)}
-              onCheckedChange={() => toggleModerationState(option.value)}
-            >
-              {option.label}
-            </DropdownMenuCheckboxItem>
-          ))}
-        </DropdownMenuContent>
-      </DropdownMenu>
+        {/* Moderation State Filter */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="outline" size="sm" className="gap-2">
+              <Filter className="h-4 w-4" />
+              Moderation
+              {moderationState.length > 0 && (
+                <Badge variant="secondary" className="ml-1 rounded-sm px-1 font-normal">
+                  {moderationState.length}
+                </Badge>
+              )}
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="w-48">
+            {moderationOptions.map((option) => (
+              <DropdownMenuCheckboxItem
+                key={option.value}
+                checked={moderationState.includes(option.value)}
+                onCheckedChange={() => toggleModerationState(option.value)}
+              >
+                {option.label}
+              </DropdownMenuCheckboxItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
 
-      {/* Clear Filters */}
-      {activeFilterCount > 0 && (
-        <Button variant="ghost" size="sm" onClick={onClearAll} className="gap-2">
-          <X className="h-4 w-4" />
-          Clear ({activeFilterCount})
-        </Button>
-      )}
+        {/* Clear Filters */}
+        {activeFilterCount > 0 && (
+          <Button variant="ghost" size="sm" onClick={onClearAll} className="gap-2">
+            <X className="h-4 w-4" />
+            Clear ({activeFilterCount})
+          </Button>
+        )}
+      </div>
     </div>
   );
 }
